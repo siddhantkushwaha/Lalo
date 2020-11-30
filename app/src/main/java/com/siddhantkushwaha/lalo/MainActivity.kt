@@ -10,9 +10,6 @@ import io.realm.Realm
 import io.realm.RealmResults
 import io.realm.Sort
 import kotlinx.android.synthetic.main.activity_main.*
-import retrofit2.Call
-import retrofit2.Callback
-import retrofit2.Response
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.log2
@@ -46,14 +43,14 @@ class MainActivity : AppCompatActivity() {
                 updateUI()
             }
 
-        updateInfoInDb()
+        runUpdateThread()
 
         button_refresh.setOnClickListener {
-            updateInfoInDb()
+            runUpdateThread()
         }
 
         button_refresh_2.setOnClickListener {
-            updateInfoInDb()
+            runUpdateThread()
         }
     }
 
@@ -69,38 +66,44 @@ class MainActivity : AppCompatActivity() {
         usageInfo?.removeAllChangeListeners()
     }
 
-    private fun updateInfoInDb() {
-        retrofitAPI.getUsageQuota(object : Callback<UsageQuotaResp> {
-            override fun onResponse(
-                call: Call<UsageQuotaResp>,
-                response: Response<UsageQuotaResp>
-            ) {
-                val usageQuotaResp = response.body()
-                if (
-                    response.isSuccessful
-                    && usageQuotaResp != null
-                    && usageQuotaResp.resultCode == 200
-                    && usageQuotaResp.rows?.size ?: 0 > 0
-                ) {
+    private fun runUpdateThread() {
+        val th = Thread {
 
-                    try {
-                        parseUsageQuotaRespAndSave(usageQuotaResp)
-                    } catch (exception: Exception) {
-                        showError()
-                        exception.printStackTrace()
-                    }
-
-                } else {
-                    showError()
-                    Log.e(TAG, "${response.isSuccessful} ${usageQuotaResp?.msg}")
-                }
+            var ret = updateInfoInDbMethod1()
+            if (ret == 0) {
+                Log.d(TAG, "Method 1 was successfull.")
+                return@Thread
             }
 
-            override fun onFailure(call: Call<UsageQuotaResp>, t: Throwable) {
+            ret = updateInfoInDbMethod2()
+            if (ret == 0) {
+                Log.d(TAG, "Method 2 was successfull.")
+                return@Thread
+            }
+        }
+        th.start()
+    }
+
+    private fun updateInfoInDbMethod1(): Int {
+        return try {
+            val response = RetrofitAPI.getUsageQuotaMethod1()
+            val usageQuotaResp = response.body()
+            if (response.isSuccessful && usageQuotaResp != null && usageQuotaResp.resultCode == 200 && usageQuotaResp.rows?.size ?: 0 > 0) {
+                parseUsageQuotaRespAndSave(usageQuotaResp)
+            } else {
                 showError()
-                t.printStackTrace()
+                Log.e(TAG, "${response.isSuccessful} ${usageQuotaResp?.msg}")
             }
-        })
+            0
+        } catch (exception: Exception) {
+            showError()
+            exception.printStackTrace()
+            1
+        }
+    }
+
+    private fun updateInfoInDbMethod2(): Int {
+        return 1
     }
 
     private fun parseUsageQuotaRespAndSave(usageQuotaResp: UsageQuotaResp) {
@@ -143,9 +146,11 @@ class MainActivity : AppCompatActivity() {
         usageInfo.bandwidth = bandwidth
         usageInfo.bandwidthAfterDataUsed = bandwidthAfterDataUsed
 
-        realm.executeTransactionAsync {
+        val realmL = RealmUtil.getCustomRealmInstance(this@MainActivity)
+        realmL.executeTransactionAsync {
             it.insertOrUpdate(usageInfo)
         }
+        realmL.close()
     }
 
     private fun getBytesFromDataString(text: String): Long {

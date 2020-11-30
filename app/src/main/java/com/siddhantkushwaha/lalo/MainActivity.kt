@@ -1,60 +1,210 @@
 package com.siddhantkushwaha.lalo
 
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
+import android.view.View
+import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.snackbar.Snackbar
+import io.realm.OrderedRealmCollectionChangeListener
+import io.realm.Realm
+import io.realm.RealmResults
+import io.realm.Sort
+import kotlinx.android.synthetic.main.activity_main.*
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
+import java.text.SimpleDateFormat
+import java.util.*
+import kotlin.math.log2
+import kotlin.math.pow
 
 class MainActivity : AppCompatActivity() {
 
     private val TAG = "MainActivity"
 
     private lateinit var retrofitAPI: RetrofitAPI
+    private lateinit var realm: Realm
+
+    private var usageInfo: RealmResults<UsageInfo>? = null
+    private lateinit var observer: OrderedRealmCollectionChangeListener<RealmResults<UsageInfo>>
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         retrofitAPI = RetrofitAPI()
+        realm = RealmUtil.getCustomRealmInstance(this)
 
-        populateInfo()
+        usageInfo =
+            realm.where(UsageInfo::class.java).sort("timestamp", Sort.DESCENDING).findAllAsync()
+        observer =
+            OrderedRealmCollectionChangeListener<RealmResults<UsageInfo>> { _, _ ->
+
+                Log.d(TAG, "${usageInfo?.size}")
+
+                updateUI()
+            }
+
+        updateInfoInDb()
+
+        button_refresh.setOnClickListener {
+            updateInfoInDb()
+        }
+
+        button_refresh_2.setOnClickListener {
+            updateInfoInDb()
+        }
     }
 
-    private fun populateInfo() {
+    override fun onResume() {
+        super.onResume()
+
+        updateUI()
+        usageInfo?.addChangeListener(observer)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        usageInfo?.removeAllChangeListeners()
+    }
+
+    private fun updateInfoInDb() {
         retrofitAPI.getUsageQuota(object : Callback<UsageQuotaResp> {
             override fun onResponse(
                 call: Call<UsageQuotaResp>,
                 response: Response<UsageQuotaResp>
             ) {
                 val usageQuotaResp = response.body()
-                if (response.isSuccessful && usageQuotaResp != null && usageQuotaResp.resultCode == 200 && usageQuotaResp.rows?.size ?: 0 > 0) {
+                if (
+                    response.isSuccessful
+                    && usageQuotaResp != null
+                    && usageQuotaResp.resultCode == 200
+                    && usageQuotaResp.rows?.size ?: 0 > 0
+                ) {
 
                     try {
-
-                        val result = usageQuotaResp.rows!![0]
-                        val usageToday = result["dailyTotalUsage"]!!
-                        val totalUsage = result["totalUsage"]
-                        val serviceName = result["serviceName"]!!
-
-                        // TODO - process above values
-
+                        parseUsageQuotaRespAndSave(usageQuotaResp)
                     } catch (exception: Exception) {
-                        // TODO - failure message
+                        showError()
                         exception.printStackTrace()
                     }
 
                 } else {
-                    // TODO - failure message
+                    showError()
                     Log.e(TAG, "${response.isSuccessful} ${usageQuotaResp?.msg}")
                 }
             }
 
             override fun onFailure(call: Call<UsageQuotaResp>, t: Throwable) {
-                // TODO - failure message
+                showError()
                 t.printStackTrace()
             }
         })
+    }
+
+    private fun parseUsageQuotaRespAndSave(usageQuotaResp: UsageQuotaResp) {
+
+        val result = usageQuotaResp.rows!![0]
+        val usageToday = result["dailyTotalUsage"]!!
+        val totalUsage = result["totalUsage"]!!
+        val serviceName = result["serviceName"]!!
+
+        // parse usage fields
+
+        val totalUsageBytes = getBytesFromDataString(totalUsage)
+        val usageTodayBytes = getBytesFromDataString(usageToday)
+
+        // parse service string to other info
+
+        var totalAvailableBytes = 0L
+        var bandwidth = ""
+        var bandwidthAfterDataUsed = ""
+
+        serviceName.toLowerCase(Locale.getDefault()).split("-").forEach {
+            if (it.contains(Regex(".*\\d.*"))) {
+                if (it.contains("bps")) {
+                    if (bandwidth == "")
+                        bandwidth = it
+                    else
+                        bandwidthAfterDataUsed = it
+                } else {
+                    totalAvailableBytes = getBytesFromDataString(it)
+                }
+            }
+        }
+
+        val usageInfo = UsageInfo()
+        usageInfo.timestamp = Date().time
+        usageInfo.usageTodayBytes = usageTodayBytes
+        usageInfo.totalUsageBytes = totalUsageBytes
+        usageInfo.totalAvailableBytes = totalAvailableBytes
+        usageInfo.serviceName = serviceName
+        usageInfo.bandwidth = bandwidth
+        usageInfo.bandwidthAfterDataUsed = bandwidthAfterDataUsed
+
+        realm.executeTransactionAsync {
+            it.insertOrUpdate(usageInfo)
+        }
+    }
+
+    private fun getBytesFromDataString(text: String): Long {
+
+        val m = mapOf("k" to 10, "m" to 20, "g" to 30, "t" to 40, "p" to 50)
+
+        var textModified = text.toLowerCase(Locale.getDefault())
+        textModified = textModified.replace("b", "")
+
+        val dataUnit = textModified.replace(Regex("[^a-z]"), "")
+        val dataValue = textModified.replace(dataUnit, "").toDouble()
+
+        val pow = m[dataUnit] ?: 0
+        val usageInBytes = dataValue * 2.0.pow(pow)
+
+        return usageInBytes.toLong()
+    }
+
+    private fun updateUI() {
+        if (usageInfo?.isValid == true && usageInfo?.size ?: 0 > 0) {
+
+            val lastObj = usageInfo?.get(0)
+            if (lastObj == null) {
+                scroll_view.visibility = View.GONE
+                return
+            } else {
+                scroll_view.visibility = View.VISIBLE
+            }
+
+            val a = lastObj.totalUsageBytes?.toFloat() ?: 0F
+            val b = lastObj.totalAvailableBytes?.toFloat() ?: 1F
+            progress_bar.setProgressWithAnimation(a / b, 1000)
+
+            usage_today.text = getBytesToHumanReadable(lastObj.usageTodayBytes ?: 0)
+
+            val c = getBytesToHumanReadable(lastObj.totalUsageBytes ?: 0)
+            val d = getBytesToHumanReadable(lastObj.totalAvailableBytes ?: 0)
+            total_usage.text = "$c of $d"
+
+            service_name.text = lastObj.serviceName
+
+            val sdf = SimpleDateFormat("dd/MM/yy hh:mm a")
+            val netDate = Date(lastObj.timestamp ?: 0)
+            val date = sdf.format(netDate)
+            timestamp.text = "Last checked on $date"
+        } else {
+            scroll_view.visibility = View.GONE
+        }
+    }
+
+    private fun getBytesToHumanReadable(dataInBytes: Long): String {
+
+        val lookUpKey = log2(dataInBytes.toDouble()).toInt() / 10
+        val m = mapOf(1 to "KB", 2 to "MB", 3 to "GB", 4 to "TB", 5 to "PB")
+
+        return "%.2f ${m[lookUpKey]}".format(dataInBytes / 2.0.pow(lookUpKey * 10))
+    }
+
+    private fun showError() {
+        Snackbar.make(layout_root, "Are you connected to the WiFi?", Snackbar.LENGTH_LONG).show()
     }
 }

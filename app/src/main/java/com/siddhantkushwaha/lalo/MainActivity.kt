@@ -37,9 +37,6 @@ class MainActivity : AppCompatActivity() {
             realm.where(UsageInfo::class.java).sort("timestamp", Sort.DESCENDING).findAllAsync()
         observer =
             OrderedRealmCollectionChangeListener<RealmResults<UsageInfo>> { _, _ ->
-
-                Log.d(TAG, "${usageInfo?.size}")
-
                 updateUI()
             }
 
@@ -80,6 +77,8 @@ class MainActivity : AppCompatActivity() {
                 Log.d(TAG, "Method 2 was successfull.")
                 return@Thread
             }
+
+            showError()
         }
         th.start()
     }
@@ -91,26 +90,44 @@ class MainActivity : AppCompatActivity() {
             if (response.isSuccessful && usageQuotaResp != null && usageQuotaResp.resultCode == 200 && usageQuotaResp.rows?.size ?: 0 > 0) {
                 parseUsageQuotaRespAndSave(usageQuotaResp)
             } else {
-                showError()
                 Log.e(TAG, "${response.isSuccessful} ${usageQuotaResp?.msg}")
+                throw Exception("Couldn't fetch usage quoto info.")
             }
             0
         } catch (exception: Exception) {
-            showError()
             exception.printStackTrace()
             1
         }
     }
 
     private fun updateInfoInDbMethod2(): Int {
-        return 1
+        return try {
+            val locationResp = RetrofitAPI.getLocation()
+            val location = locationResp.body()?.location
+            if (location != null) {
+                val response = RetrofitAPI.getUsageQuotaMethod2(location)
+                val usageQuotaResp = response.body()
+                if (response.isSuccessful && usageQuotaResp != null && usageQuotaResp.resultCode == 200 && usageQuotaResp.rows?.size ?: 0 > 0) {
+                    parseUsageQuotaRespAndSave(usageQuotaResp)
+                } else {
+                    Log.e(TAG, "${response.isSuccessful} ${usageQuotaResp?.msg}")
+                    throw Exception("Couldn't fetch usage quota info.")
+                }
+            } else {
+                throw Exception("Couldn't fetch location.")
+            }
+            0
+        } catch (exception: Exception) {
+            exception.printStackTrace()
+            1
+        }
     }
 
     private fun parseUsageQuotaRespAndSave(usageQuotaResp: UsageQuotaResp) {
 
         val result = usageQuotaResp.rows!![0]
-        val usageToday = result["dailyTotalUsage"]!!
-        val totalUsage = result["totalUsage"]!!
+        val usageToday = result["dailyTotalUsage"] ?: result["dailyUsedOctets"]!!
+        val totalUsage = result["totalUsage"] ?: result["totalOctets"]!!
         val serviceName = result["serviceName"]!!
 
         // parse usage fields
@@ -126,7 +143,7 @@ class MainActivity : AppCompatActivity() {
 
         serviceName.toLowerCase(Locale.getDefault()).split("-").forEach {
             if (it.contains(Regex(".*\\d.*"))) {
-                if (it.contains("bps")) {
+                if (it.contains("mb") || it.contains("bps")) {
                     if (bandwidth == "")
                         bandwidth = it
                     else

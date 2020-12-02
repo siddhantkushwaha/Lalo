@@ -1,5 +1,6 @@
-package com.siddhantkushwaha.lalo
+package com.siddhantkushwaha.lalo.request
 
+import com.siddhantkushwaha.lalo.util.Util
 import retrofit2.Call
 import retrofit2.Response
 import retrofit2.Retrofit

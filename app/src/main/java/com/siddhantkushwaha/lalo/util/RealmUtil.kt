@@ -1,4 +1,4 @@
-package com.siddhantkushwaha.lalo
+package com.siddhantkushwaha.lalo.util
 
 import android.content.Context
 import io.realm.Realm

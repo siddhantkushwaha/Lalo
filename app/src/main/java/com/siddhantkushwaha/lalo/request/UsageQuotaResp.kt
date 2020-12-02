@@ -1,4 +1,4 @@
-package com.siddhantkushwaha.lalo
+package com.siddhantkushwaha.lalo.request
 
 class UsageQuotaResp {
 
